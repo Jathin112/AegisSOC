@@ -170,6 +170,9 @@ export function runDetectionRules(
               contextFlags: ['BRUTE_FORCE_PATTERN'],
               decisionExplanation: `ACTIVE ALERT: Account '${inWindow[0].user}' experienced ${inWindow.length} failed logins in ${repeatedRule.params.repeatedFailuresWindowMinutes} mins. Pattern exceeds brute force threshold without valid business justification.`,
               isContextSuppressed: false,
+              confidenceScore: Math.min(96, 75 + inWindow.length * 4),
+              confidenceLabel: inWindow.length >= 5 ? 'VERY_HIGH' : 'HIGH',
+              evidenceStrength: inWindow.length >= 5 ? 'VERY_STRONG' : 'STRONG',
               details: {
                 failureCount: inWindow.length,
                 timeWindowMinutes: repeatedRule.params.repeatedFailuresWindowMinutes,
@@ -216,6 +219,9 @@ export function runDetectionRules(
               contextFlags: ['CREDENTIAL_CRACKING_SUCCESS', 'CONFIRMED_COMPROMISE'],
               decisionExplanation: `CONFIRMED COMPROMISE: Account '${successLog.user}' suffered ${precedingFailures.length} failed attempts before authentication succeeded from IP ${successLog.ip}. High probability of cracked credentials.`,
               isContextSuppressed: false,
+              confidenceScore: 98,
+              confidenceLabel: 'VERY_HIGH',
+              evidenceStrength: 'VERY_STRONG',
               details: {
                 priorFailures: precedingFailures.length,
                 successHost: successLog.host,
@@ -261,6 +267,9 @@ export function runDetectionRules(
                 contextFlags: ['PASSWORD_SPRAY_CAMPAIGN'],
                 decisionExplanation: `ACTIVE ALERT: Origin IP ${sourceIp} targeted multiple corporate accounts (${distinctUsers.length} users) in rapid succession with failed credentials. Classic horizontal password spray.`,
                 isContextSuppressed: false,
+                confidenceScore: 92,
+                confidenceLabel: 'VERY_HIGH',
+                evidenceStrength: 'VERY_STRONG',
                 details: {
                   sourceIp,
                   totalTargetedUsers: distinctUsers.length,
@@ -325,6 +334,9 @@ export function runDetectionRules(
           decisionExplanation: explanation,
           isContextSuppressed: isSuppressed,
           suppressionReason: isSuppressed ? `Approved Maintenance Window: ${matchedWin?.id}` : undefined,
+          confidenceScore: isSuppressed ? 25 : 70,
+          confidenceLabel: isSuppressed ? 'LOW' : 'MODERATE',
+          evidenceStrength: isSuppressed ? 'WEAK' : 'MODERATE',
           details: {
             observedHour: hour,
             usualHours: baseline.usualHours,
@@ -393,6 +405,9 @@ export function runDetectionRules(
           decisionExplanation: explanation,
           isContextSuppressed: isSuppressed,
           suppressionReason: isSuppressed ? `Authorized Corporate VPN: ${matchedVpn?.gatewayName}` : undefined,
+          confidenceScore: isSuppressed ? 20 : 82,
+          confidenceLabel: isSuppressed ? 'LOW' : 'HIGH',
+          evidenceStrength: isSuppressed ? 'WEAK' : 'STRONG',
           details: {
             observedIp: log.ip,
             observedLocation: log.location,
@@ -495,6 +510,9 @@ export function runDetectionRules(
             decisionExplanation: explanation,
             isContextSuppressed: isSuppressed,
             suppressionReason: isSuppressed ? `Authorized Helpdesk in Window: ${matchedWindows[0]?.id}` : undefined,
+            confidenceScore: isSuppressed ? 18 : hasCriticalAssets ? 96 : 85,
+            confidenceLabel: isSuppressed ? 'LOW' : hasCriticalAssets ? 'VERY_HIGH' : 'HIGH',
+            evidenceStrength: isSuppressed ? 'WEAK' : hasCriticalAssets ? 'VERY_STRONG' : 'STRONG',
             details: {
               newHosts: distinctNewHosts,
               baselineHosts: baseline.usualHosts,

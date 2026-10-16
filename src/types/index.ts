@@ -179,6 +179,70 @@ export interface DetectionAlert {
   decisionExplanation?: string;
   isContextSuppressed?: boolean;
   suppressionReason?: string;
+
+  // Confidence & Evidence Strength (Mission 3)
+  confidenceScore?: number; // 0 - 100%
+  confidenceLabel?: 'VERY_HIGH' | 'HIGH' | 'MODERATE' | 'LOW';
+  evidenceStrength?: 'VERY_STRONG' | 'STRONG' | 'MODERATE' | 'WEAK';
+}
+
+export interface RiskScoreContribution {
+  ruleId: string;
+  ruleName: string;
+  category: RuleCategory;
+  pointsAdded: number; // Positive contribution or negative mitigation
+  percentageOfTotal: number;
+  reason: string;
+  evidenceCount: number;
+}
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: 'USER' | 'IP' | 'HOST';
+  isBaseline?: boolean;
+  isNovel?: boolean;
+  isCritical?: boolean;
+  isVpn?: boolean;
+  failCount: number;
+  successCount: number;
+  details?: Record<string, any>;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  action: 'SUCCESS' | 'FAILURE' | 'MIXED';
+  count: number;
+  isNovelPath?: boolean;
+}
+
+export interface UserHostGraph {
+  user: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  totalHostsAccessed: number;
+  novelHostsCount: number;
+  baselineHostsCount: number;
+}
+
+export interface IncidentTimelineEvent {
+  id: string;
+  timestamp: string; // ISO 8601 UTC
+  epochMs: number;
+  type: 'AUTH_SUCCESS' | 'AUTH_FAILURE' | 'DETECTION_ALERT';
+  title: string;
+  description: string;
+  ip?: string;
+  host?: string;
+  severity?: SeverityLevel;
+  alertId?: string;
+  ruleCategory?: RuleCategory;
+  confidence?: string;
+  isSuspicious: boolean;
+  failureReason?: string;
+  location?: string;
 }
 
 export interface IncidentNote {
@@ -217,6 +281,11 @@ export interface UserIncident {
   decisionExplanation?: string;
   isContextSuppressed?: boolean;
   maintenanceWindowId?: string;
+
+  // Mission 3: Visualizations & Traceability
+  riskBreakdown?: RiskScoreContribution[];
+  hostGraph?: UserHostGraph;
+  timelineEvents?: IncidentTimelineEvent[];
 }
 
 export interface TrainingPeriodConfig {

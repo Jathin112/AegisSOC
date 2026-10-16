@@ -122,3 +122,92 @@ While contextual rules eliminate operational false alarms, security teams must b
    - *Risk:* Genuine emergency operational fixes performed outside declared maintenance windows will still trigger alerts.
    - *Mitigation:* Analysts can declare retroactive ad-hoc maintenance windows in the **Maintenance & Context** dashboard or mark the incident as `BENIGN_MAINTENANCE` in the triage audit journal.
 
+---
+
+## Mission 3: Forensic Visualizations, Scoring Logic, and Evidence Traceability
+
+### 1. Visualization Architecture & Interactive Workbenches
+
+AegisSOC provides specialized interactive visualization modules inside the **SOC Investigation Dossier**:
+
+#### A. Chronological Incident & Attack Progression Timeline (`IncidentTimelineVisualizer`)
+- **Unified Event Sequence:** Plots suspicious authentication attempts (failed logins in red, successful logins in green) along with correlated SOC Detection Alert triggers on a unified UTC temporal axis.
+- **Interactive Multi-Mode Filtering:** Analysts can filter between:
+  - *All Events:* Full interleaved chronological telemetry.
+  - *Alerts Only:* High-level detection alert pins.
+  - *Failures Only:* Concentrated authentication failure sequences (brute-force / spray).
+  - *Successes Only:* Breached access points and post-compromise logins.
+- **Search & Payload Inspection:** Live textual search across hosts, IPs, and failure reasons, with instant one-click raw payload copying for forensic records.
+
+#### B. User-to-Host Communication & Lateral Movement Graph (`UserHostGraphVisualizer`)
+- **Topological Network Mapping:** Renders an interactive 3-tier node-and-edge graph:
+  - **Tier 1 (User Node):** Central account entity annotated with role, department, and total success/failure counts.
+  - **Tier 2 (Origin IP Nodes):** Origin network endpoints annotated with public/private subnet tags and corporate VPN badges.
+  - **Tier 3 (Target Host Nodes):** Target servers and endpoints color-coded by forensic baseline status:
+    - *Baseline Habitual Host (Green):* Verified historical workstation present in training baseline.
+    - *Novel Host Expansion (Amber dashed):* Unfamiliar endpoint indicating potential lateral movement.
+    - *Tier-0 Critical Asset (Red solid):* High-value domain controller (`DC01`), credential vault (`VAULT-SRV`), or database.
+- **Curved Connection Edges:** Cubic Bezier curves connecting User $\rightarrow$ IP $\rightarrow$ Host, styled by outcome (Success = Green, Failure = Red, Mixed = Amber) with animated stroke patterns for unauthorized lateral paths.
+
+---
+
+### 2. Transparent Mathematical Risk-Scoring Breakdown
+
+AegisSOC eliminates "black box" risk scoring by generating an itemized mathematical breakdown for every incident:
+
+$$\text{Final Score} = \min\left(100, \max\left(\text{Floor}, \left(\sum \text{Base Points} + \text{Correlation Bonus} + \text{Volume Bonus}\right) - \text{Context Mitigations}\right)\right)$$
+
+#### Base Category Weights
+- **Burst Failure Followed by Success:** $+45\text{ pts}$ (Direct indication of cracked credentials).
+- **Sudden Host Access Expansion:** $+30\text{ pts}$ (Lateral movement across novel endpoints).
+- **Horizontal Password Spraying:** $+25\text{ pts}$ (Multi-account credential reconnaissance).
+- **Repeated Authentication Failures:** $+20\text{ pts}$ (Focused brute-force attempt).
+- **Unfamiliar IP / Subnet Login:** $+18\text{ pts}$ (Anomalous origin location).
+- **Unusual / Off-Hours Activity:** $+15\text{ pts}$ (Temporal baseline deviation).
+
+#### Compounding Multipliers & Adjustments
+- **Multi-Vector Compounding Bonus:**
+  - $\ge 3$ distinct anomaly vectors: $+35\%$ compounding multiplier.
+  - $2$ distinct anomaly vectors: $+15\%$ compounding multiplier.
+- **Evidence Volume Factor:**
+  - $>10$ correlated evidence events: $+10\text{ pts}$.
+  - $>5$ correlated evidence events: $+5\text{ pts}$.
+- **Confirmed Compromise Risk Floor:** Any incident involving proven credential compromise or unauthorized domain controller takeover is floored at a minimum of $85/100$.
+- **Context Mitigation Discount:** Incidents verified against approved maintenance windows or corporate VPN gateways receive an operational deduction (bringing net score down to $8/100$).
+
+---
+
+### 3. Evidence Traceability Chain & Confidence Scoring
+
+AegisSOC maintains an unbroken chain of forensic custody from raw input to executive dossier:
+
+```
+[Raw CSV Row]
+    │  Canonical UTF-8 normalization, header mapping, UTC datetime standardization
+    ▼
+[NormalizedAuthLog (FNV-1a Hash)]
+    │  Fingerprint: EVT-XXXXXXXX across (time|user|ip|host|action|reason)
+    ▼
+[DetectionAlert]
+    │  Rule ID, Category, Decision Explanation, Context Flags
+    │  Confidence Rating: VERY_HIGH (≥95%), HIGH (80–94%), MODERATE (50–79%), LOW (<50%)
+    │  Evidence Strength: VERY_STRONG (≥5 events), STRONG (3–4), MODERATE (1–2), WEAK (mitigated)
+    ▼
+[UserIncident Dossier]
+       - Grouped alerts, timeline events, host communication graph, risk breakdown
+```
+
+---
+
+### 4. Forensic & Heuristic Limitations
+
+1. **Passive Offline Telemetry (Absence of Process Lineage):**
+   - *Limitation:* AegisSOC operates strictly on authentication logs. It cannot inspect endpoint process trees (e.g. `lsass.exe` dumping, PowerShell script execution).
+   - *Recommendation:* Triage steps prompt analysts to cross-reference EDR telemetry on flagged target hosts.
+2. **Inferred Host Topology:**
+   - *Limitation:* The User-to-Host communication graph maps authenticated connections, not layer-3 network routing hops.
+3. **Training Baseline Poisoning:**
+   - *Limitation:* If an adversary had already established persistent footholds during the declared training period, their baseline activity may be learned as "habitual."
+   - *Mitigation:* Sliding training window configurations and strict rule thresholds for critical Tier-0 assets regardless of prior baseline presence.
+
+

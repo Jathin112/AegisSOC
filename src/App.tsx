@@ -138,7 +138,7 @@ export function App() {
     setAlerts(generatedAlerts);
 
     // Aggregate Incidents with Context
-    const generatedIncidents = aggregateIncidents(generatedAlerts, companyId, userAccounts);
+    const generatedIncidents = aggregateIncidents(generatedAlerts, companyId, userAccounts, baselineRes.baselines);
     setIncidents(generatedIncidents);
   };
 
@@ -166,7 +166,7 @@ export function App() {
 
     // Re-aggregate incidents (preserve status & notes of existing incidents where applicable)
     setIncidents(prevIncidents => {
-      const fresh = aggregateIncidents(generatedAlerts, selectedCompanyId, userAccounts);
+      const fresh = aggregateIncidents(generatedAlerts, selectedCompanyId, userAccounts, baselineRes.baselines);
       return fresh.map(newInc => {
         const existing = prevIncidents.find(old => old.user.toLowerCase() === newInc.user.toLowerCase());
         if (existing) {
