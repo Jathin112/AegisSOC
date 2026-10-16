@@ -1,11 +1,14 @@
-import { DetectionAlert, UserIncident, NormalizedAuthLog, RuleCategory } from '../types';
+import { DetectionAlert, UserIncident, NormalizedAuthLog, RuleCategory, UserAccountConfig } from '../types';
 import { calculateRiskScore, generateTriageSteps } from './riskScorer';
 
 export function aggregateIncidents(
   alerts: DetectionAlert[],
-  companyId: string = 'COMP-001'
+  companyId: string = 'COMP-001',
+  userAccounts: UserAccountConfig[] = []
 ): UserIncident[] {
   const userAlertsMap = new Map<string, DetectionAlert[]>();
+  const accountsMap = new Map<string, UserAccountConfig>();
+  userAccounts.forEach(acc => accountsMap.set(acc.username.toLowerCase(), acc));
 
   // Group alerts by user
   for (const alert of alerts) {
@@ -19,7 +22,8 @@ export function aggregateIncidents(
   const incidents: UserIncident[] = [];
 
   userAlertsMap.forEach((userAlerts, userKey) => {
-    const { score, severity, threatClass } = calculateRiskScore(userAlerts);
+    const userCfg = accountsMap.get(userKey);
+    const { score, severity, threatClass, isAllContextSuppressed, decisionExplanation } = calculateRiskScore(userAlerts);
 
     // Collect all evidence rows
     const evidenceMap = new Map<string, NormalizedAuthLog>();
@@ -48,8 +52,18 @@ export function aggregateIncidents(
       triggeredCategories,
       involvedHosts,
       involvedIPs,
-      threatClass
+      threatClass,
+      isAllContextSuppressed
     );
+
+    // Collect all context flags
+    const contextFlagsSet = new Set<string>();
+    if (userCfg?.role) contextFlagsSet.add(`ROLE:${userCfg.role}`);
+    if (userCfg?.isAuthorizedHelpdesk) contextFlagsSet.add('AUTHORIZED_HELPDESK');
+    if (userCfg?.isApprovedTraveler) contextFlagsSet.add('APPROVED_TRAVELER');
+    userAlerts.forEach(a => {
+      a.contextFlags?.forEach(f => contextFlagsSet.add(f));
+    });
 
     const incident: UserIncident = {
       id: `INC-${userKey.toUpperCase()}-${Math.abs(score * 31 + userAlerts.length).toString(16).toUpperCase()}`,
@@ -58,7 +72,7 @@ export function aggregateIncidents(
       riskScore: score,
       severity,
       threatClass,
-      status: 'NEW',
+      status: isAllContextSuppressed ? 'BENIGN_MAINTENANCE' : 'NEW',
       alerts: userAlerts,
       triggeredRuleCategories: triggeredCategories,
       evidenceRows,
@@ -68,12 +82,20 @@ export function aggregateIncidents(
       involvedHosts,
       involvedIPs,
       recommendedTriageSteps,
+      accountRole: userCfg?.role || 'REGULAR_USER',
+      isHelpdesk: userCfg?.isAuthorizedHelpdesk || userCfg?.role === 'HELPDESK',
+      isTravelingEmployee: userCfg?.isApprovedTraveler,
+      contextFlags: Array.from(contextFlagsSet),
+      decisionExplanation,
+      isContextSuppressed: isAllContextSuppressed,
       notes: [
         {
           id: `NOTE-${Date.now()}-1`,
-          author: 'AegisSOC Automated Triage',
+          author: 'AegisSOC Context Triage Engine',
           timestamp: new Date().toISOString(),
-          text: `Incident generated automatically with risk score ${score}/100. ${userAlerts.length} correlated alert(s) across ${triggeredCategories.length} rule categories.`
+          text: isAllContextSuppressed
+            ? `Context evaluation: User '${displayUser}' activity verified against declared maintenance window & authorized corporate VPN. Risk score reduced to ${score}/100 to prevent false-positive alert fatigue.`
+            : `Incident evaluated with risk score ${score}/100. ${decisionExplanation}`
         }
       ],
       updatedAt: new Date().toISOString()
@@ -82,6 +104,6 @@ export function aggregateIncidents(
     incidents.push(incident);
   });
 
-  // Sort incidents by risk score descending (highest risk first)
+  // Sort: Active threats first (highest risk), then benign maintenance at bottom
   return incidents.sort((a, b) => b.riskScore - a.riskScore);
 }

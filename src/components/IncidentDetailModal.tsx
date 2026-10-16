@@ -99,6 +99,7 @@ export const IncidentDetailModal: React.FC<IncidentDetailModalProps> = ({
                 <option value="NEW">NEW</option>
                 <option value="INVESTIGATING">INVESTIGATING</option>
                 <option value="ESCALATED">ESCALATED</option>
+                <option value="BENIGN_MAINTENANCE">BENIGN MAINTENANCE</option>
                 <option value="REMEDIATED">REMEDIATED</option>
                 <option value="FALSE_POSITIVE">FALSE POSITIVE</option>
               </select>
@@ -114,6 +115,45 @@ export const IncidentDetailModal: React.FC<IncidentDetailModalProps> = ({
           <div className="investigation-grid">
             {/* Left Column: Forensic Evidence & Baseline Comparison */}
             <div>
+              {/* Context Decision & Rationale Card */}
+              <div 
+                className="detail-card"
+                style={{
+                  borderLeft: incident.isContextSuppressed ? '4px solid #16a34a' : isCompromise ? '4px solid #991b1b' : '4px solid #334155',
+                  backgroundColor: incident.isContextSuppressed ? '#f0fdf4' : '#ffffff'
+                }}
+              >
+                <div className="detail-card-title" style={{ color: incident.isContextSuppressed ? '#166534' : undefined }}>
+                  <ShieldAlert size={14} />
+                  Contextual Decision Analysis &amp; False-Positive Evaluation
+                </div>
+
+                <div style={{ fontSize: 12, color: incident.isContextSuppressed ? '#14532d' : '#1e293b', marginBottom: 8, lineHeight: 1.5 }}>
+                  <strong>Decision Rationale:</strong> {incident.decisionExplanation || 'Standard detection heuristics applied.'}
+                </div>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  <span className="badge" style={{ backgroundColor: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' }}>
+                    Role: {incident.accountRole || 'REGULAR_USER'}
+                  </span>
+                  {incident.isHelpdesk && (
+                    <span className="badge" style={{ backgroundColor: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe' }}>
+                      AUTHORIZED HELPDESK ACCOUNT
+                    </span>
+                  )}
+                  {incident.isTravelingEmployee && (
+                    <span className="badge" style={{ backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' }}>
+                      APPROVED CORPORATE TRAVELER
+                    </span>
+                  )}
+                  {incident.contextFlags?.map(flag => (
+                    <span key={flag} className="badge" style={{ backgroundColor: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0' }}>
+                      {flag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
               {/* Behavioral Baseline vs Anomaly Comparison */}
               <div className="detail-card">
                 <div className="detail-card-title">

@@ -85,8 +85,21 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             <option value="NEW">New</option>
             <option value="INVESTIGATING">Investigating</option>
             <option value="ESCALATED">Escalated</option>
+            <option value="BENIGN_MAINTENANCE">Benign Maintenance</option>
             <option value="REMEDIATED">Remediated</option>
             <option value="FALSE_POSITIVE">False Positive</option>
+          </select>
+
+          {/* Context / False Positive Filter */}
+          <select
+            className="filter-select"
+            value={filters.contextFilter || 'ALL'}
+            onChange={(e) => setFilters(prev => ({ ...prev, contextFilter: e.target.value as any }))}
+          >
+            <option value="ALL">All Contexts</option>
+            <option value="ACTIONABLE_ONLY">Actionable Threats Only (Hide Maintenance)</option>
+            <option value="SUPPRESSED_MAINTENANCE">Suppressed Helpdesk Maintenance</option>
+            <option value="VPN_TRAVEL">Corporate VPN Travelers</option>
           </select>
 
           {/* User filter */}

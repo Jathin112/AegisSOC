@@ -43,21 +43,8 @@ export function normalizeTimestamp(raw: string | number | undefined | null): Nor
 
   const str = String(raw).trim();
 
-  // Try native Date.parse first
-  const nativeParsed = Date.parse(str);
-  if (!isNaN(nativeParsed)) {
-    const date = new Date(nativeParsed);
-    return {
-      iso: date.toISOString(),
-      dateObj: date,
-      epochMs: date.getTime(),
-      isValid: true,
-      detectedFormat: 'STANDARD_OR_ISO'
-    };
-  }
-
-  // Custom regex parsing for common syslog and AD formats:
-  // e.g. "2026-10-14 08:30:00", "2026/10/14 08:30:00"
+  // 1. Custom regex parsing for common syslog and AD formats as UTC by default:
+  // e.g. "2026-10-14 08:30:00", "2026/10/14 08:30:00", "2026-10-14T08:30:00"
   const isoLikeMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\.(\d+))?(?:Z|([+-]\d{2}:?\d{2}))?$/i);
   if (isoLikeMatch) {
     const [_, y, m, d, hh, mm, ss = '0', ms = '0', tz] = isoLikeMatch;
@@ -72,6 +59,19 @@ export function normalizeTimestamp(raw: string | number | undefined | null): Nor
         detectedFormat: 'CUSTOM_ISO_LIKE'
       };
     }
+  }
+
+  // 2. Try native Date.parse
+  const nativeParsed = Date.parse(str);
+  if (!isNaN(nativeParsed)) {
+    const date = new Date(nativeParsed);
+    return {
+      iso: date.toISOString(),
+      dateObj: date,
+      epochMs: date.getTime(),
+      isValid: true,
+      detectedFormat: 'STANDARD_OR_ISO'
+    };
   }
 
   // e.g. "10/14/2026 08:30:00 AM" or "10/14/2026 14:30:00"

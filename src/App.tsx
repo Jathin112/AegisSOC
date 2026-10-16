@@ -8,10 +8,14 @@ import {
   TrainingPeriodConfig, 
   CompanyAccessConfig, 
   FilterState, 
-  IncidentStatus 
+  IncidentStatus,
+  UserAccountConfig,
+  MaintenanceWindow,
+  CompanyVpnConfig
 } from './types';
 import { DEFAULT_RULES } from './config/defaultRules';
 import { DEFAULT_COMPANIES } from './config/defaultCompanies';
+import { DEFAULT_USER_ACCOUNTS, DEFAULT_MAINTENANCE_WINDOWS, DEFAULT_VPN_CONFIGS } from './config/defaultContext';
 import { SAMPLE_CSV_LOGS } from './data/sampleLogs';
 import { parseAuthLogsCsv } from './utils/csvParser';
 import { deduplicateLogs } from './utils/logDeduplicator';
@@ -29,14 +33,20 @@ import { BaselineViewer } from './components/BaselineViewer';
 import { RulesConfigModal } from './components/RulesConfigModal';
 import { LogsExplorer } from './components/LogsExplorer';
 import { CompanyAccessManager } from './components/CompanyAccessManager';
+import { MaintenanceContextManager } from './components/MaintenanceContextManager';
 import { ReportExportModal } from './components/ReportExportModal';
 import { LogUploadModal } from './components/LogUploadModal';
-import { ShieldAlert, AlertTriangle, Lock, Unlock } from 'lucide-react';
+import { Lock } from 'lucide-react';
 
 export function App() {
   // Enterprise Tenant State
   const [companies, setCompanies] = useState<CompanyAccessConfig[]>(DEFAULT_COMPANIES);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('COMP-001');
+
+  // Mission Context: Accounts, Maintenance Windows & VPN Information
+  const [userAccounts, setUserAccounts] = useState<UserAccountConfig[]>(DEFAULT_USER_ACCOUNTS);
+  const [maintenanceWindows, setMaintenanceWindows] = useState<MaintenanceWindow[]>(DEFAULT_MAINTENANCE_WINDOWS);
+  const [vpnConfigs, setVpnConfigs] = useState<CompanyVpnConfig[]>(DEFAULT_VPN_CONFIGS);
 
   // Logs & Processing State
   const [allLogs, setAllLogs] = useState<NormalizedAuthLog[]>([]);
@@ -60,7 +70,7 @@ export function App() {
   const [selectedIncident, setSelectedIncident] = useState<UserIncident | null>(null);
 
   // UI Navigation & Filters State
-  const [activeTab, setActiveTab] = useState<'incidents' | 'baselines' | 'rules' | 'logs' | 'companies'>('incidents');
+  const [activeTab, setActiveTab] = useState<'incidents' | 'baselines' | 'rules' | 'logs' | 'companies' | 'context'>('incidents');
   const [filters, setFilters] = useState<FilterState>({
     searchQuery: '',
     severity: 'ALL',
@@ -69,7 +79,8 @@ export function App() {
     status: 'ALL',
     user: '',
     host: '',
-    companyId: 'COMP-001'
+    companyId: 'COMP-001',
+    contextFilter: 'ALL'
   });
 
   // Modals
@@ -115,16 +126,23 @@ export function App() {
     setTrainingLogCount(baselineRes.trainingLogCount);
     setEvaluationLogCount(baselineRes.evaluationLogCount);
 
-    // Run Detection Rules
-    const generatedAlerts = runDetectionRules(dedupRes.uniqueLogs, baselineRes.baselines, rules);
+    // Run Detection Rules with Context (Helpdesk accounts, Maintenance Windows, Corporate VPN)
+    const generatedAlerts = runDetectionRules(
+      dedupRes.uniqueLogs, 
+      baselineRes.baselines, 
+      rules,
+      userAccounts,
+      maintenanceWindows,
+      vpnConfigs
+    );
     setAlerts(generatedAlerts);
 
-    // Aggregate Incidents
-    const generatedIncidents = aggregateIncidents(generatedAlerts, companyId);
+    // Aggregate Incidents with Context
+    const generatedIncidents = aggregateIncidents(generatedAlerts, companyId, userAccounts);
     setIncidents(generatedIncidents);
   };
 
-  // Re-run rules whenever rules or trainingConfig change
+  // Re-run rules whenever rules, context, or trainingConfig change
   useEffect(() => {
     if (uniqueLogs.length === 0) return;
 
@@ -135,13 +153,20 @@ export function App() {
     setTrainingLogCount(baselineRes.trainingLogCount);
     setEvaluationLogCount(baselineRes.evaluationLogCount);
 
-    // Re-run rules
-    const generatedAlerts = runDetectionRules(uniqueLogs, baselineRes.baselines, rules);
+    // Re-run rules with updated context
+    const generatedAlerts = runDetectionRules(
+      uniqueLogs, 
+      baselineRes.baselines, 
+      rules,
+      userAccounts,
+      maintenanceWindows,
+      vpnConfigs
+    );
     setAlerts(generatedAlerts);
 
     // Re-aggregate incidents (preserve status & notes of existing incidents where applicable)
     setIncidents(prevIncidents => {
-      const fresh = aggregateIncidents(generatedAlerts, selectedCompanyId);
+      const fresh = aggregateIncidents(generatedAlerts, selectedCompanyId, userAccounts);
       return fresh.map(newInc => {
         const existing = prevIncidents.find(old => old.user.toLowerCase() === newInc.user.toLowerCase());
         if (existing) {
@@ -154,7 +179,7 @@ export function App() {
         return newInc;
       });
     });
-  }, [rules, trainingConfig]);
+  }, [rules, trainingConfig, userAccounts, maintenanceWindows, vpnConfigs]);
 
   // Update incident status
   const handleUpdateStatus = (incidentId: string, status: IncidentStatus) => {
@@ -209,6 +234,11 @@ export function App() {
       if (filters.user && inc.user.toLowerCase() !== filters.user.toLowerCase()) return false;
       if (filters.host && !inc.involvedHosts.some(h => h.toLowerCase() === filters.host.toLowerCase())) return false;
 
+      // Context Filter
+      if (filters.contextFilter === 'ACTIONABLE_ONLY' && inc.isContextSuppressed) return false;
+      if (filters.contextFilter === 'SUPPRESSED_MAINTENANCE' && (!inc.isContextSuppressed && !inc.isHelpdesk)) return false;
+      if (filters.contextFilter === 'VPN_TRAVEL' && (!inc.isTravelingEmployee && !inc.contextFlags?.some(f => f.includes('VPN')))) return false;
+
       if (!filters.searchQuery) return true;
       const q = filters.searchQuery.toLowerCase();
       return (
@@ -216,6 +246,7 @@ export function App() {
         inc.id.toLowerCase().includes(q) ||
         inc.involvedHosts.some(h => h.toLowerCase().includes(q)) ||
         inc.involvedIPs.some(ip => ip.includes(q)) ||
+        inc.decisionExplanation?.toLowerCase().includes(q) ||
         inc.triggeredRuleCategories.some(cat => cat.toLowerCase().includes(q))
       );
     });
@@ -239,12 +270,13 @@ export function App() {
       status: 'ALL',
       user: '',
       host: '',
-      companyId: selectedCompanyId
+      companyId: selectedCompanyId,
+      contextFilter: 'ALL'
     });
   };
 
   const confirmedCount = useMemo(() => {
-    return incidents.filter(i => i.threatClass === 'CONFIRMED_COMPROMISE').length;
+    return incidents.filter(i => i.threatClass === 'CONFIRMED_COMPROMISE' && !i.isContextSuppressed).length;
   }, [incidents]);
 
   return (
@@ -262,6 +294,7 @@ export function App() {
         onResetSampleData={() => processCsvLogs(SAMPLE_CSV_LOGS, 50, selectedCompanyId)}
         incidentCount={incidents.length}
         confirmedCount={confirmedCount}
+        maintenanceCount={maintenanceWindows.filter(w => w.status === 'ACTIVE').length}
       />
 
       {/* Main Body Content */}
@@ -318,7 +351,19 @@ export function App() {
           </>
         )}
 
-        {/* Tab 2: User Baselines */}
+        {/* Tab 2: Operational Context & Maintenance Windows */}
+        {activeTab === 'context' && (
+          <MaintenanceContextManager
+            maintenanceWindows={maintenanceWindows}
+            setMaintenanceWindows={setMaintenanceWindows}
+            userAccounts={userAccounts}
+            setUserAccounts={setUserAccounts}
+            vpnConfigs={vpnConfigs}
+            setVpnConfigs={setVpnConfigs}
+          />
+        )}
+
+        {/* Tab 3: User Baselines */}
         {activeTab === 'baselines' && (
           <BaselineViewer
             baselines={baselines}
@@ -329,7 +374,7 @@ export function App() {
           />
         )}
 
-        {/* Tab 3: Detection Rules */}
+        {/* Tab 4: Detection Rules */}
         {activeTab === 'rules' && (
           <RulesConfigModal
             rules={rules}
@@ -338,12 +383,12 @@ export function App() {
           />
         )}
 
-        {/* Tab 4: Normalized Logs Explorer */}
+        {/* Tab 5: Normalized Logs Explorer */}
         {activeTab === 'logs' && (
           <LogsExplorer logs={allLogs} />
         )}
 
-        {/* Tab 5: Enterprise Multi-Tenant Access */}
+        {/* Tab 6: Enterprise Multi-Tenant Access */}
         {activeTab === 'companies' && (
           <CompanyAccessManager
             companies={companies}

@@ -87,14 +87,16 @@ export const MetricCards: React.FC<MetricCardsProps> = ({
 
       <div className="metric-card">
         <div className="metric-top">
-          <span className="metric-label">Average Risk Score</span>
-          <div className="metric-icon-box">
-            <Activity size={15} />
+          <span className="metric-label">Context Mitigations</span>
+          <div className="metric-icon-box" style={{ backgroundColor: '#f0fdf4', color: '#166534' }}>
+            <ShieldCheck size={15} />
           </div>
         </div>
-        <div className="metric-value">{avgRiskScore}<span style={{ fontSize: 14, color: 'var(--slate-500)' }}>/100</span></div>
+        <div className="metric-value" style={{ color: '#166534' }}>
+          {incidents.filter(i => i.isContextSuppressed).length}
+        </div>
         <div className="metric-sub">
-          <span>Targeting {new Set(incidents.map(i => i.user)).size} enterprise accounts</span>
+          <span>False-positives suppressed via maintenance &amp; VPN</span>
         </div>
       </div>
     </div>

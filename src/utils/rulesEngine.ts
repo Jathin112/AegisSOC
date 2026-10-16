@@ -1,17 +1,119 @@
-import { NormalizedAuthLog, UserBaseline, DetectionRule, DetectionAlert } from '../types';
+import { 
+  NormalizedAuthLog, 
+  UserBaseline, 
+  DetectionRule, 
+  DetectionAlert, 
+  UserAccountConfig, 
+  MaintenanceWindow, 
+  CompanyVpnConfig 
+} from '../types';
 import { extractSubnet } from './baselineLearner';
+
+/**
+ * Checks if a specific log event matches a declared maintenance window
+ */
+export function matchMaintenanceWindow(
+  epochMs: number,
+  user: string,
+  userConfig: UserAccountConfig | undefined,
+  host: string,
+  windows: MaintenanceWindow[]
+): MaintenanceWindow | null {
+  for (const win of windows) {
+    if (win.status !== 'COMPLETED' && epochMs >= win.startEpochMs && epochMs <= win.endEpochMs) {
+      const userRole = userConfig?.role || 'REGULAR_USER';
+      const roleApproved = win.approvedRoles.includes(userRole) || (userConfig?.isAuthorizedHelpdesk && win.approvedRoles.includes('HELPDESK'));
+      const accountApproved = win.approvedAccounts.includes('*') || win.approvedAccounts.includes(user.toLowerCase());
+
+      if (roleApproved || accountApproved) {
+        // Scope matching (e.g. ['*'] or ['ALL_WORKSTATIONS'] or host prefix/exact)
+        const hostScopeMatch = win.targetScope.some(scope => {
+          if (scope === '*' || scope === 'ALL_WORKSTATIONS') return true;
+          if (scope.endsWith('*')) {
+            const prefix = scope.slice(0, -1).toUpperCase();
+            return host.toUpperCase().startsWith(prefix);
+          }
+          return scope.toUpperCase() === host.toUpperCase();
+        });
+
+        if (hostScopeMatch) {
+          return win;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Checks if a log event matches an authorized Corporate VPN gateway or pool
+ */
+export function matchCompanyVpn(
+  ip: string,
+  host: string,
+  location: string,
+  vpns: CompanyVpnConfig[]
+): CompanyVpnConfig | null {
+  for (const vpn of vpns) {
+    // Check if host is VPN gateway
+    if (vpn.gatewayName && host.toUpperCase().includes(vpn.gatewayName.toUpperCase())) {
+      return vpn;
+    }
+    // Check gateway public IP
+    if (vpn.gatewayIPs && vpn.gatewayIPs.includes(ip)) {
+      return vpn;
+    }
+    // Check CIDR prefix (e.g. 10.250.x.x)
+    for (const range of vpn.ipRanges) {
+      const prefix = range.split('/')[0].split('.').slice(0, 2).join('.');
+      if (ip.startsWith(prefix + '.')) {
+        return vpn;
+      }
+    }
+    // Check location string for corporate VPN indication
+    if (location && (location.toLowerCase().includes('vpn') || location.toLowerCase().includes(vpn.gatewayName.toLowerCase()))) {
+      return vpn;
+    }
+  }
+  return null;
+}
 
 export function runDetectionRules(
   allLogs: NormalizedAuthLog[],
   baselines: Map<string, UserBaseline>,
-  rules: DetectionRule[]
+  rules: DetectionRule[],
+  userAccounts: UserAccountConfig[] = [],
+  maintenanceWindows: MaintenanceWindow[] = [],
+  vpnConfigs: CompanyVpnConfig[] = []
 ): DetectionAlert[] {
   const alerts: DetectionAlert[] = [];
   const rulesMap = new Map<string, DetectionRule>();
   rules.forEach(r => rulesMap.set(r.category, r));
 
+  const accountsMap = new Map<string, UserAccountConfig>();
+  userAccounts.forEach(acc => accountsMap.set(acc.username.toLowerCase(), acc));
+
   // Sort logs chronologically
   const sortedLogs = [...allLogs].sort((a, b) => a.epochMs - b.epochMs);
+
+  // Annotate logs with context
+  sortedLogs.forEach(log => {
+    const userKey = log.user.toLowerCase().trim();
+    const userCfg = accountsMap.get(userKey);
+    log.accountRole = userCfg?.role || 'REGULAR_USER';
+
+    const matchedWin = matchMaintenanceWindow(log.epochMs, log.user, userCfg, log.host, maintenanceWindows);
+    if (matchedWin) {
+      log.inMaintenanceWindow = true;
+      log.matchedMaintenanceWindowId = matchedWin.id;
+    }
+
+    const matchedVpn = matchCompanyVpn(log.ip, log.host, log.location, vpnConfigs);
+    if (matchedVpn) {
+      log.isVpnLogin = true;
+    }
+  });
+
   // Group logs by user
   const userLogsMap = new Map<string, NormalizedAuthLog[]>();
   for (const log of sortedLogs) {
@@ -36,7 +138,6 @@ export function runDetectionRules(
     const windowMs = (repeatedRule.params.repeatedFailuresWindowMinutes || 10) * 60 * 1000;
 
     userLogsMap.forEach((userLogs, username) => {
-      // Find sliding windows of failures
       const failureLogs = userLogs.filter(l => l.action === 'FAILURE');
       if (failureLogs.length < threshold) return;
 
@@ -66,6 +167,9 @@ export function runDetectionRules(
               score: repeatedRule.baseWeight,
               summary: `${inWindow.length} consecutive authentication failures detected within ${repeatedRule.params.repeatedFailuresWindowMinutes} minutes across ${targetedHosts.join(', ')} from IP(s): ${sourceIps.join(', ')}.`,
               evidence: inWindow,
+              contextFlags: ['BRUTE_FORCE_PATTERN'],
+              decisionExplanation: `ACTIVE ALERT: Account '${inWindow[0].user}' experienced ${inWindow.length} failed logins in ${repeatedRule.params.repeatedFailuresWindowMinutes} mins. Pattern exceeds brute force threshold without valid business justification.`,
+              isContextSuppressed: false,
               details: {
                 failureCount: inWindow.length,
                 timeWindowMinutes: repeatedRule.params.repeatedFailuresWindowMinutes,
@@ -91,7 +195,6 @@ export function runDetectionRules(
           const successLog = userLogs[i];
           const windowStart = successLog.epochMs - windowMs;
 
-          // Look backwards for preceding failures
           const precedingFailures = userLogs
             .slice(0, i)
             .filter(l => l.epochMs >= windowStart && l.epochMs <= successLog.epochMs && l.action === 'FAILURE');
@@ -110,6 +213,9 @@ export function runDetectionRules(
               score: burstRule.baseWeight,
               summary: `CRITICAL: ${precedingFailures.length} failed attempts immediately followed by a SUCCESSFUL login within ${burstRule.params.burstSuccessWindowMinutes} mins. Strong evidence of credential cracking or unauthorized access.`,
               evidence,
+              contextFlags: ['CREDENTIAL_CRACKING_SUCCESS', 'CONFIRMED_COMPROMISE'],
+              decisionExplanation: `CONFIRMED COMPROMISE: Account '${successLog.user}' suffered ${precedingFailures.length} failed attempts before authentication succeeded from IP ${successLog.ip}. High probability of cracked credentials.`,
+              isContextSuppressed: false,
               details: {
                 priorFailures: precedingFailures.length,
                 successHost: successLog.host,
@@ -130,7 +236,6 @@ export function runDetectionRules(
     const windowMs = (sprayRule.params.sprayWindowMinutes || 20) * 60 * 1000;
 
     ipLogsMap.forEach((ipLogs, sourceIp) => {
-      // Ignore private localhost if desired, but check corporate subnets or external IPs
       for (let i = 0; i < ipLogs.length; i++) {
         const startMs = ipLogs[i].epochMs;
         const endMs = startMs + windowMs;
@@ -138,12 +243,9 @@ export function runDetectionRules(
         const distinctUsers = Array.from(new Set(inWindow.map(l => l.user.toLowerCase().trim())));
 
         if (distinctUsers.length >= minUsers) {
-          // Check if mostly failures
           const failureCount = inWindow.filter(l => l.action === 'FAILURE').length;
           if (failureCount >= distinctUsers.length) {
-            // Generate alert for each affected user or group alert
             distinctUsers.forEach(u => {
-              const userEvidence = inWindow.filter(l => l.user.toLowerCase().trim() === u);
               alerts.push({
                 id: `ALT-SPRAY-${sourceIp.replace(/[^a-zA-Z0-9]/g, '_')}-${u}-${ipLogs[i].id}`,
                 ruleId: sprayRule.id,
@@ -156,6 +258,9 @@ export function runDetectionRules(
                 score: sprayRule.baseWeight,
                 summary: `Source IP ${sourceIp} executed horizontal password spray targeting ${distinctUsers.length} accounts (${distinctUsers.slice(0, 4).join(', ')}${distinctUsers.length > 4 ? '...' : ''}) within ${sprayRule.params.sprayWindowMinutes} mins.`,
                 evidence: inWindow,
+                contextFlags: ['PASSWORD_SPRAY_CAMPAIGN'],
+                decisionExplanation: `ACTIVE ALERT: Origin IP ${sourceIp} targeted multiple corporate accounts (${distinctUsers.length} users) in rapid succession with failed credentials. Classic horizontal password spray.`,
+                isContextSuppressed: false,
                 details: {
                   sourceIp,
                   totalTargetedUsers: distinctUsers.length,
@@ -164,17 +269,16 @@ export function runDetectionRules(
                 }
               });
             });
-            break; // Stop further overlapping alerts for this IP burst
+            break;
           }
         }
       }
     });
   }
 
-  // 4. UNUSUAL LOGIN TIMES (Off-hours anomaly)
+  // 4. UNUSUAL LOGIN TIMES (Off-hours anomaly with Maintenance Context)
   const timeRule = rulesMap.get('UNUSUAL_TIME');
   if (timeRule && timeRule.enabled) {
-    // Only check logs outside training period to avoid self-flagging training baseline
     const evalLogs = sortedLogs.filter(l => !l.inTrainingPeriod);
 
     for (const log of evalLogs) {
@@ -182,10 +286,29 @@ export function runDetectionRules(
       const baseline = baselines.get(uKey);
       if (!baseline || baseline.totalEvents < 3) continue;
 
+      const userCfg = accountsMap.get(uKey);
       const hour = log.dateObj.getUTCHours();
       const isUsualHour = baseline.usualHours.includes(hour);
 
       if (!isUsualHour) {
+        // Context Check: Is this off-hours login during a declared maintenance window by authorized staff?
+        const matchedWin = matchMaintenanceWindow(log.epochMs, log.user, userCfg, log.host, maintenanceWindows);
+        const isHelpdeskOrAdmin = userCfg?.isAuthorizedHelpdesk || userCfg?.role === 'HELPDESK' || userCfg?.role === 'SYSADMIN';
+
+        let isSuppressed = false;
+        let score = timeRule.baseWeight;
+        let severity = timeRule.severity;
+        let explanation = `Login occurred at UTC ${hour.toString().padStart(2, '0')}:00, an hour with ZERO recorded baseline activity (normal hours: ${baseline.usualHours.map(h => `${h}:00`).join(', ')}).`;
+        const flags: string[] = ['OFF_HOURS_LOGIN'];
+
+        if (matchedWin && isHelpdeskOrAdmin) {
+          isSuppressed = true;
+          score = 5;
+          severity = 'LOW';
+          flags.push('MAINTENANCE_WINDOW_APPROVED', 'AUTHORIZED_STAFF');
+          explanation = `FALSE POSITIVE MITIGATED: Off-hours login at UTC ${hour}:00 occurred during approved Maintenance Window '${matchedWin.id}' (${matchedWin.name}, Ticket: ${matchedWin.changeTicket}) by authorized role '${userCfg?.role}'. Risk downgraded.`;
+        }
+
         alerts.push({
           id: `ALT-TIME-${uKey}-${log.id}`,
           ruleId: timeRule.id,
@@ -193,24 +316,29 @@ export function runDetectionRules(
           ruleName: timeRule.name,
           user: log.user,
           timestamp: log.timestamp,
-          severity: timeRule.severity,
-          threatClass: timeRule.threatClass,
-          score: timeRule.baseWeight,
-          summary: `Login occurred at UTC ${hour.toString().padStart(2, '0')}:00, an hour with ZERO recorded baseline activity (normal hours: ${baseline.usualHours.map(h => `${h}:00`).join(', ')}).`,
+          severity,
+          threatClass: isSuppressed ? 'SUSPICIOUS' : timeRule.threatClass,
+          score,
+          summary: explanation,
           evidence: [log],
+          contextFlags: flags,
+          decisionExplanation: explanation,
+          isContextSuppressed: isSuppressed,
+          suppressionReason: isSuppressed ? `Approved Maintenance Window: ${matchedWin?.id}` : undefined,
           details: {
             observedHour: hour,
             usualHours: baseline.usualHours,
             action: log.action,
             host: log.host,
-            ip: log.ip
+            ip: log.ip,
+            maintenanceWindow: matchedWin?.id || null
           }
         });
       }
     }
   }
 
-  // 5. UNFAMILIAR IPS / SUBNETS
+  // 5. UNFAMILIAR IPS / SUBNETS (with Corporate VPN & Travelling Employee Context)
   const ipRule = rulesMap.get('UNFAMILIAR_IP');
   if (ipRule && ipRule.enabled) {
     const evalLogs = sortedLogs.filter(l => !l.inTrainingPeriod);
@@ -220,6 +348,7 @@ export function runDetectionRules(
       const baseline = baselines.get(uKey);
       if (!baseline || baseline.totalEvents < 2) continue;
 
+      const userCfg = accountsMap.get(uKey);
       const logSubnet = extractSubnet(log.ip);
       const isKnownIp = baseline.usualIPs.includes(log.ip);
       const isKnownSubnet = baseline.usualSubnets.includes(logSubnet);
@@ -227,6 +356,27 @@ export function runDetectionRules(
       const isUnfamiliar = ipRule.params.subnetMatchOnly ? !isKnownSubnet : !isKnownIp;
 
       if (isUnfamiliar) {
+        // Context Check: Is this coming via Company VPN Gateway or authorized traveling employee?
+        const matchedVpn = matchCompanyVpn(log.ip, log.host, log.location, vpnConfigs);
+        const isApprovedTraveler = userCfg?.isApprovedTraveler || false;
+
+        let isSuppressed = false;
+        let score = ipRule.baseWeight;
+        let severity = ipRule.severity;
+        let explanation = `Authentication from unfamiliar IP address ${log.ip} (${log.location || 'Unknown Geo'}, Subnet: ${logSubnet}) not present in baseline profile.`;
+        const flags: string[] = ['UNFAMILIAR_IP'];
+
+        if (matchedVpn) {
+          flags.push('CORPORATE_VPN_GATEWAY', matchedVpn.gatewayName);
+          if (isApprovedTraveler || log.action === 'SUCCESS') {
+            isSuppressed = true;
+            score = 5;
+            severity = 'LOW';
+            flags.push('LEGITIMATE_TRAVELER_APPROVED');
+            explanation = `FALSE POSITIVE MITIGATED: Connection from unfamiliar IP ${log.ip} authenticated through approved Corporate VPN Gateway (${matchedVpn.gatewayName}, ${matchedVpn.locationLabel}). User '${log.user}' is designated as an approved travelling employee with MFA verification.`;
+          }
+        }
+
         alerts.push({
           id: `ALT-IP-${uKey}-${log.id}`,
           ruleId: ipRule.id,
@@ -234,32 +384,40 @@ export function runDetectionRules(
           ruleName: ipRule.name,
           user: log.user,
           timestamp: log.timestamp,
-          severity: ipRule.severity,
-          threatClass: ipRule.threatClass,
-          score: ipRule.baseWeight,
-          summary: `Authentication from unfamiliar IP address ${log.ip} (${log.location || 'Unknown Geo'}, Subnet: ${logSubnet}) not present in baseline profile.`,
+          severity,
+          threatClass: isSuppressed ? 'SUSPICIOUS' : ipRule.threatClass,
+          score,
+          summary: explanation,
           evidence: [log],
+          contextFlags: flags,
+          decisionExplanation: explanation,
+          isContextSuppressed: isSuppressed,
+          suppressionReason: isSuppressed ? `Authorized Corporate VPN: ${matchedVpn?.gatewayName}` : undefined,
           details: {
             observedIp: log.ip,
             observedLocation: log.location,
             baselineUsualIps: baseline.usualIPs,
-            baselineUsualSubnets: baseline.usualSubnets
+            baselineUsualSubnets: baseline.usualSubnets,
+            corporateVpnGateway: matchedVpn?.gatewayName || null,
+            approvedTraveler: isApprovedTraveler
           }
         });
       }
     }
   }
 
-  // 6. SUDDEN HOST ACCESS EXPANSION (LATERAL MOVEMENT)
+  // 6. SUDDEN HOST ACCESS EXPANSION (with Helpdesk Maintenance Context)
   const hostRule = rulesMap.get('HOST_EXPANSION');
   if (hostRule && hostRule.enabled) {
-    const evalLogs = sortedLogs.filter(l => !l.inTrainingPeriod && l.action === 'SUCCESS');
     const threshold = hostRule.params.hostExpansionNewHostsThreshold || 1;
     const windowMs = (hostRule.params.hostExpansionWindowMinutes || 60) * 60 * 1000;
 
     userLogsMap.forEach((userLogs, username) => {
       const baseline = baselines.get(username);
       if (!baseline || baseline.totalEvents < 2) return;
+
+      const userCfg = accountsMap.get(username);
+      const isHelpdesk = userCfg?.isAuthorizedHelpdesk || userCfg?.role === 'HELPDESK';
 
       const evalUserLogs = userLogs.filter(l => !l.inTrainingPeriod && l.action === 'SUCCESS');
       const unfamiliarHostLogs = evalUserLogs.filter(
@@ -268,7 +426,7 @@ export function runDetectionRules(
 
       if (unfamiliarHostLogs.length === 0) return;
 
-      // Check in sliding window
+      // Sliding window evaluation
       for (let i = 0; i < unfamiliarHostLogs.length; i++) {
         const startMs = unfamiliarHostLogs[i].epochMs;
         const endMs = startMs + windowMs;
@@ -276,6 +434,51 @@ export function runDetectionRules(
         const distinctNewHosts = Array.from(new Set(inWindow.map(l => l.host.toUpperCase().trim())));
 
         if (distinctNewHosts.length >= threshold) {
+          // Check Maintenance Window Context for all accessed hosts
+          const matchedWindows = inWindow
+            .map(l => matchMaintenanceWindow(l.epochMs, l.user, userCfg, l.host, maintenanceWindows))
+            .filter(Boolean) as MaintenanceWindow[];
+
+          const allInMaintenance = matchedWindows.length > 0 && inWindow.every(l => 
+            matchMaintenanceWindow(l.epochMs, l.user, userCfg, l.host, maintenanceWindows) !== null
+          );
+
+          // Does user have unapproved high-value targets (e.g. Domain Controller, Vault)?
+          const hasCriticalAssets = distinctNewHosts.some(h => 
+            h.includes('DC') || h.includes('VAULT') || h.includes('PROD')
+          );
+
+          let isSuppressed = false;
+          let severity = hostRule.severity;
+          let threatClass = hostRule.threatClass;
+          let score = hostRule.baseWeight;
+          let flags: string[] = ['HOST_EXPANSION'];
+          let explanation = `Lateral access expansion: User successfully accessed ${distinctNewHosts.length} new host(s) (${distinctNewHosts.join(', ')}) never accessed during baseline (Authorized: ${baseline.usualHosts.join(', ')}).`;
+
+          if (isHelpdesk && allInMaintenance && !hasCriticalAssets) {
+            // Requirement 2: Reduce false positives when legitimate helpdesk accounts access multiple hosts during approved maintenance windows!
+            isSuppressed = true;
+            severity = 'LOW';
+            threatClass = 'SUSPICIOUS';
+            score = 5;
+            flags.push('AUTHORIZED_HELPDESK', 'MAINTENANCE_WINDOW_APPROVED', 'FALSE_POSITIVE_SUPPRESSED');
+            const win = matchedWindows[0];
+            explanation = `FALSE POSITIVE MITIGATED: Authorized Helpdesk account '${username}' accessed ${distinctNewHosts.length} endpoints (${distinctNewHosts.slice(0, 3).join(', ')}${distinctNewHosts.length > 3 ? '...' : ''}) within approved Maintenance Window '${win.id}' (${win.name}, Change Ticket: ${win.changeTicket}). Host expansion is expected operational activity.`;
+          } else {
+            // Requirement 5: Continue flagging regular users who access many unfamiliar hosts outside approved maintenance windows!
+            flags.push(userCfg?.role || 'REGULAR_USER');
+            if (hasCriticalAssets) {
+              flags.push('CRITICAL_ASSET_LATERAL_MOVEMENT');
+              severity = 'CRITICAL';
+              threatClass = 'CONFIRMED_COMPROMISE';
+              score = 45;
+              explanation = `ACTIVE CRITICAL ALERT: User role '${userCfg?.role || 'REGULAR_USER'}' executed unauthorized lateral expansion onto ${distinctNewHosts.length} critical server(s) [${distinctNewHosts.join(', ')}] outside authorized maintenance parameters. Potential domain takeover attempt.`;
+            } else if (!allInMaintenance) {
+              flags.push('OUTSIDE_MAINTENANCE_WINDOW');
+              explanation = `ACTIVE ALERT: User '${username}' accessed ${distinctNewHosts.length} unfamiliar host(s) OUTSIDE any declared maintenance window. User role: ${userCfg?.role || 'REGULAR_USER'}.`;
+            }
+          }
+
           alerts.push({
             id: `ALT-HOST-${username}-${unfamiliarHostLogs[i].id}`,
             ruleId: hostRule.id,
@@ -283,18 +486,25 @@ export function runDetectionRules(
             ruleName: hostRule.name,
             user: unfamiliarHostLogs[i].user,
             timestamp: inWindow[inWindow.length - 1].timestamp,
-            severity: hostRule.severity,
-            threatClass: hostRule.threatClass,
-            score: hostRule.baseWeight,
-            summary: `Lateral access expansion: User successfully accessed ${distinctNewHosts.length} new host(s) (${distinctNewHosts.join(', ')}) never accessed during baseline (Authorized: ${baseline.usualHosts.join(', ')}).`,
+            severity,
+            threatClass,
+            score,
+            summary: explanation,
             evidence: inWindow,
+            contextFlags: flags,
+            decisionExplanation: explanation,
+            isContextSuppressed: isSuppressed,
+            suppressionReason: isSuppressed ? `Authorized Helpdesk in Window: ${matchedWindows[0]?.id}` : undefined,
             details: {
               newHosts: distinctNewHosts,
               baselineHosts: baseline.usualHosts,
-              windowMinutes: hostRule.params.hostExpansionWindowMinutes
+              windowMinutes: hostRule.params.hostExpansionWindowMinutes,
+              isHelpdesk,
+              allInMaintenance,
+              hasCriticalAssets
             }
           });
-          break; // Stop duplicate cascades
+          break;
         }
       }
     });

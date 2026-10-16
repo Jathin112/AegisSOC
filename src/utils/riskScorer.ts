@@ -1,18 +1,43 @@
-import { DetectionAlert, UserIncident, SeverityLevel, ThreatClass, RuleCategory, NormalizedAuthLog } from '../types';
+import { DetectionAlert, SeverityLevel, ThreatClass, RuleCategory } from '../types';
 
-export function calculateRiskScore(alerts: DetectionAlert[]): {
+export interface CalculatedRiskResult {
   score: number;
   severity: SeverityLevel;
   threatClass: ThreatClass;
-} {
+  isAllContextSuppressed: boolean;
+  decisionExplanation: string;
+}
+
+export function calculateRiskScore(alerts: DetectionAlert[]): CalculatedRiskResult {
   if (alerts.length === 0) {
-    return { score: 0, severity: 'LOW', threatClass: 'SUSPICIOUS' };
+    return { 
+      score: 0, 
+      severity: 'LOW', 
+      threatClass: 'SUSPICIOUS',
+      isAllContextSuppressed: false,
+      decisionExplanation: 'No anomalies detected.'
+    };
   }
 
-  // Check if any alert is marked as CONFIRMED_COMPROMISE
-  const hasConfirmedCompromise = alerts.some(a => a.threatClass === 'CONFIRMED_COMPROMISE');
+  // Filter between actionable alerts and context-suppressed alerts
+  const actionableAlerts = alerts.filter(a => !a.isContextSuppressed);
+  const suppressedAlerts = alerts.filter(a => a.isContextSuppressed);
+  const isAllContextSuppressed = actionableAlerts.length === 0 && suppressedAlerts.length > 0;
 
-  // Sum up base weights with diminishing returns for duplicates
+  if (isAllContextSuppressed) {
+    const reasons = Array.from(new Set(suppressedAlerts.map(a => a.suppressionReason).filter(Boolean)));
+    return {
+      score: 8,
+      severity: 'LOW',
+      threatClass: 'SUSPICIOUS',
+      isAllContextSuppressed: true,
+      decisionExplanation: `BENIGN CONTEXT MITIGATION: All detected anomalies (${suppressedAlerts.length} events) were verified against approved operational schedules and corporate VPN gateways (${reasons.join(', ')}). Threat risk suppressed to prevent false positive alert fatigue.`
+    };
+  }
+
+  // Check if any actionable alert is marked as CONFIRMED_COMPROMISE
+  const hasConfirmedCompromise = actionableAlerts.some(a => a.threatClass === 'CONFIRMED_COMPROMISE');
+
   const categoryWeights: Record<RuleCategory, number> = {
     BURST_FAILURE_THEN_SUCCESS: 45,
     HOST_EXPANSION: 30,
@@ -22,16 +47,15 @@ export function calculateRiskScore(alerts: DetectionAlert[]): {
     UNUSUAL_TIME: 15
   };
 
-  const triggeredCategories = new Set(alerts.map(a => a.ruleCategory));
+  const triggeredCategories = new Set(actionableAlerts.map(a => a.ruleCategory));
   let totalScore = 0;
 
-  // Add category weight
+  // Add category weight for actionable alerts
   triggeredCategories.forEach(cat => {
     totalScore += categoryWeights[cat] || 15;
   });
 
-  // Compounding multiplier: If multiple distinct attack patterns are observed together,
-  // the probability of an active intrusion escalates drastically.
+  // Compounding multiplier for multi-vector attacks
   const distinctCategoriesCount = triggeredCategories.size;
   if (distinctCategoriesCount >= 3) {
     totalScore *= 1.35;
@@ -39,8 +63,8 @@ export function calculateRiskScore(alerts: DetectionAlert[]): {
     totalScore *= 1.15;
   }
 
-  // Volume factor based on total evidence rows
-  const totalEvidenceCount = alerts.reduce((acc, a) => acc + (a.evidence?.length || 1), 0);
+  // Volume factor based on actionable evidence rows
+  const totalEvidenceCount = actionableAlerts.reduce((acc, a) => acc + (a.evidence?.length || 1), 0);
   if (totalEvidenceCount > 10) {
     totalScore += 10;
   } else if (totalEvidenceCount > 5) {
@@ -73,7 +97,24 @@ export function calculateRiskScore(alerts: DetectionAlert[]): {
     threatClass = 'CONFIRMED_COMPROMISE';
   }
 
-  return { score: finalScore, severity, threatClass };
+  const explanations: string[] = [];
+  if (hasConfirmedCompromise) {
+    explanations.push('Critical threat: Credential compromise pattern identified.');
+  }
+  if (triggeredCategories.has('HOST_EXPANSION')) {
+    explanations.push('Host expansion outside authorized maintenance window detected.');
+  }
+  if (suppressedAlerts.length > 0) {
+    explanations.push(`(${suppressedAlerts.length} operational maintenance events suppressed).`);
+  }
+
+  return { 
+    score: finalScore, 
+    severity, 
+    threatClass,
+    isAllContextSuppressed: false,
+    decisionExplanation: explanations.join(' ') || 'Elevated risk score due to correlated authentication deviations.'
+  };
 }
 
 export function generateTriageSteps(
@@ -81,9 +122,18 @@ export function generateTriageSteps(
   categories: RuleCategory[],
   hosts: string[],
   ips: string[],
-  threatClass: ThreatClass
+  threatClass: ThreatClass,
+  isAllContextSuppressed: boolean = false
 ): string[] {
   const steps: string[] = [];
+
+  if (isAllContextSuppressed) {
+    steps.push(`1. Verify change ticket reference and maintenance window schedule with IT Desktop Helpdesk.`);
+    steps.push(`2. Confirm automated deployment scripts or remote diagnostics completed successfully on targeted workstations.`);
+    steps.push(`3. Review post-maintenance system health checks on modified endpoints [${hosts.slice(0, 3).join(', ')}].`);
+    steps.push(`4. Close incident ticket as BENIGN_MAINTENANCE (No hostile activity detected).`);
+    return steps;
+  }
 
   if (threatClass === 'CONFIRMED_COMPROMISE') {
     steps.push(`🚨 CRITICAL: Immediately revoke all active Kerberos TGTs, OAuth/SAML sessions, and refresh tokens for user '${user}'.`);

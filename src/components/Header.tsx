@@ -13,8 +13,8 @@ import {
 import { CompanyAccessConfig } from '../types';
 
 interface HeaderProps {
-  activeTab: 'incidents' | 'baselines' | 'rules' | 'logs' | 'companies';
-  setActiveTab: (tab: 'incidents' | 'baselines' | 'rules' | 'logs' | 'companies') => void;
+  activeTab: 'incidents' | 'baselines' | 'rules' | 'logs' | 'companies' | 'context';
+  setActiveTab: (tab: 'incidents' | 'baselines' | 'rules' | 'logs' | 'companies' | 'context') => void;
   companies: CompanyAccessConfig[];
   selectedCompanyId: string;
   onSelectCompany: (companyId: string) => void;
@@ -24,6 +24,7 @@ interface HeaderProps {
   onResetSampleData: () => void;
   incidentCount: number;
   confirmedCount: number;
+  maintenanceCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -37,7 +38,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenRulesConfig,
   onResetSampleData,
   incidentCount,
-  confirmedCount
+  confirmedCount,
+  maintenanceCount = 2
 }) => {
   const currentCompany = companies.find(c => c.id === selectedCompanyId) || companies[0];
 
@@ -59,7 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </div>
             <div className="brand-subtitle">
-              Behavioral Baseline Learning &amp; Multi-Rule Anomaly Detection Engine
+              Context-Aware Behavioral Baselines &amp; Threat Detection Engine
             </div>
           </div>
         </div>
@@ -111,6 +113,14 @@ export const Header: React.FC<HeaderProps> = ({
           <ListFilter size={15} />
           Incidents &amp; Triage
           {incidentCount > 0 && <span className="tab-badge">{incidentCount}</span>}
+        </button>
+        <button
+          className={`nav-tab ${activeTab === 'context' ? 'active' : ''}`}
+          onClick={() => setActiveTab('context')}
+        >
+          <Sliders size={15} />
+          Maintenance &amp; Context
+          <span className="tab-badge">{maintenanceCount} Active</span>
         </button>
         <button
           className={`nav-tab ${activeTab === 'baselines' ? 'active' : ''}`}

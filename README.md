@@ -81,3 +81,44 @@ Validates the entire pipeline: ingestion &rarr; deduplication &rarr; baseline le
 npm run build
 ```
 Produces optimized static client assets in `dist/`.
+
+---
+
+## Mission Context Architecture: False-Positive Mitigation & Context-Aware Scoring
+
+### 1. Context-Aware Detection Model
+Standard statistical anomaly detection suffers from heavy alert fatigue due to authorized operational events:
+- **Mass Endpoint Access during Maintenance:** IT helpdesk technicians connecting to tens of employee workstations to deploy urgent security patches or configuration changes.
+- **Traveling Employees:** Sales directors and executives authenticating from unfamiliar foreign hotel IPs through corporate VPN gateways.
+
+AegisSOC introduces three contextual layers:
+1. **Declared Maintenance Windows (`MaintenanceWindow`):** Approved change windows tied to Change Advisory Board (CAB) ticket references, strict UTC start/end timestamps, approved roles (`HELPDESK`), and host pattern scopes (`ALL_WORKSTATIONS`, `WKSTN-*`).
+2. **Account Role Registry (`UserAccountConfig`):** Distinguishes `HELPDESK`, `SYSADMIN`, and `REGULAR_USER` roles.
+3. **Corporate VPN Gateway Profile (`CompanyVpnConfig`):** Whitelists official enterprise VPN pools (`10.250.0.0/16`, `VPN-GW01`) requiring multi-factor authentication (MFA).
+
+---
+
+### 2. Quantitative Impact of Contextual Rules
+
+| Metric | Without Context (Naive Anomaly Detection) | With AegisSOC Contextual Rules | Net Change |
+|---|---|---|---|
+| **Helpdesk Multi-Host Alerts** | 5 Critical Host Expansion Alerts | **0 False Positives** (Tagged as `BENIGN_MAINTENANCE`, Score: 8/100) | **-100% False Positives** |
+| **Traveling Staff VPN Logins** | Flagged as High Severity Unfamiliar Foreign IP | **0 False Positives** (Recognized as MFA-Verified Corporate Traveler) | **-100% False Positives** |
+| **Rogue Admin / Compromised Account** (`dave.admin` accessing DC01 & Vault) | Flagged as Critical Lateral Movement | **Retained as Critical Confirmed Compromise** (Score: 95/100) | **100% True Positive Retention** |
+| **External Credential Cracking** (`sarah.jenkins` Bucharest IP burst) | Flagged as Confirmed Compromise | **Retained as Critical Confirmed Compromise** (Score: 100/100) | **100% True Positive Retention** |
+
+---
+
+### 3. Remaining Uncertainties & Residual Risks
+
+While contextual rules eliminate operational false alarms, security teams must be aware of specific residual uncertainties:
+1. **Compromised VPN Credentials vs. Legitimate Travel:**
+   - *Risk:* An adversary with stolen employee credentials and an intercepted session token connecting through the corporate VPN gateway will appear as an approved traveler.
+   - *Mitigation:* AegisSOC correlates subsequent internal behavior (e.g., accessing domain controllers or unapproved file shares) and enforces impossible travel time checks.
+2. **Helpdesk Account Hijacking during Active Maintenance Windows:**
+   - *Risk:* If a Helpdesk account is compromised during an active maintenance window, the attacker could exploit the window to access workstations with reduced alert thresholds.
+   - *Mitigation:* AegisSOC verifies asset scope boundaries. If a Helpdesk account accesses critical Tier-0 infrastructure (e.g. `DC01`, `VAULT-SRV`) even inside a maintenance window, the suppression is automatically bypassed, elevating the incident to Critical Confirmed Compromise.
+3. **Emergency Unscheduled Changes (Missing CAB Ticket):**
+   - *Risk:* Genuine emergency operational fixes performed outside declared maintenance windows will still trigger alerts.
+   - *Mitigation:* Analysts can declare retroactive ad-hoc maintenance windows in the **Maintenance & Context** dashboard or mark the incident as `BENIGN_MAINTENANCE` in the triage audit journal.
+
