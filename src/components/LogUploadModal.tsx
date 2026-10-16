@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { X, Upload, FileText, CheckCircle2, AlertCircle, Database, Play } from 'lucide-react';
+import { X, Upload, FileText, CheckCircle2, AlertCircle, Database, Play, Download } from 'lucide-react';
 import { SAMPLE_CSV_LOGS, CLEAN_BENCHMARK_CSV } from '../data/sampleLogs';
 import { TrainingPeriodConfig } from '../types';
 
@@ -206,6 +206,18 @@ export const LogUploadModal: React.FC<LogUploadModalProps> = ({
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 4 }}>
                   Accepts standard authentication logs (RFC4180 CSV with headers: timestamp, user, ip, host, action, reason)
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: '#f8fafc', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 11 }}>
+                <span style={{ color: '#475569', fontWeight: 500 }}>Repository Sample CSVs:</span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <a href="/enterprise_auth_attack_logs.csv" download="enterprise_auth_attack_logs.csv" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
+                    <Download size={11} /> Download Multi-Attack CSV
+                  </a>
+                  <a href="/clean_baseline_logs.csv" download="clean_baseline_logs.csv" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
+                    <Download size={11} /> Download Clean Baseline CSV
+                  </a>
                 </div>
               </div>
             </div>
