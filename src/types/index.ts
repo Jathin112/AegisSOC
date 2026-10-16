@@ -96,6 +96,11 @@ export interface NormalizedAuthLog {
   isVpnLogin?: boolean;
   inMaintenanceWindow?: boolean;
   matchedMaintenanceWindowId?: string;
+
+  // Mission 4: Telemetry Quality & Uncertainty Tracking
+  ipValidationStatus?: 'VALID' | 'MISSING' | 'INVALID_FORMAT';
+  telemetryUncertainty?: boolean;
+  uncertaintyNotes?: string;
 }
 
 export interface UserBaseline {
@@ -118,7 +123,8 @@ export type RuleCategory =
   | 'PASSWORD_SPRAY'
   | 'UNUSUAL_TIME'
   | 'UNFAMILIAR_IP'
-  | 'HOST_EXPANSION';
+  | 'HOST_EXPANSION'
+  | 'IMPOSSIBLE_TRAVEL';
 
 export interface DetectionRule {
   id: string;
@@ -153,6 +159,10 @@ export interface DetectionRule {
     hostExpansionNewHostsThreshold?: number;
     hostExpansionWindowMinutes?: number;
 
+    // Impossible Travel
+    impossibleTravelMaxVelocityKmH?: number;
+    impossibleTravelWindowMinutes?: number;
+
     // Context & False Positive Reduction Toggles
     considerMaintenanceWindows?: boolean;
     suppressAuthorizedHelpdeskInWindow?: boolean;
@@ -184,6 +194,10 @@ export interface DetectionAlert {
   confidenceScore?: number; // 0 - 100%
   confidenceLabel?: 'VERY_HIGH' | 'HIGH' | 'MODERATE' | 'LOW';
   evidenceStrength?: 'VERY_STRONG' | 'STRONG' | 'MODERATE' | 'WEAK';
+
+  // Mission 4: Telemetry Quality & Uncertainty Tracking
+  telemetryUncertainty?: boolean;
+  uncertaintyNotes?: string;
 }
 
 export interface RiskScoreContribution {

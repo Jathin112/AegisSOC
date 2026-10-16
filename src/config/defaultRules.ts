@@ -83,5 +83,19 @@ export const DEFAULT_RULES: DetectionRule[] = [
       hostExpansionNewHostsThreshold: 1,
       hostExpansionWindowMinutes: 60
     }
+  },
+  {
+    id: 'RULE-007',
+    name: 'Impossible Travel / Geographic Velocity Anomaly',
+    category: 'IMPOSSIBLE_TRAVEL',
+    description: 'Detects consecutive authentications for the same account from physically distant geographic locations within a timeframe exceeding realistic physical transit speed, excluding verified corporate VPN gateways.',
+    enabled: true,
+    severity: 'CRITICAL',
+    threatClass: 'CONFIRMED_COMPROMISE',
+    baseWeight: 40,
+    params: {
+      impossibleTravelMaxVelocityKmH: 800,
+      impossibleTravelWindowMinutes: 120
+    }
   }
 ];

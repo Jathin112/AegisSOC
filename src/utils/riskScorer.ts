@@ -32,11 +32,13 @@ export function calculateRiskScore(alerts: DetectionAlert[]): CalculatedRiskResu
     PASSWORD_SPRAY: 'Horizontal Password Spraying',
     REPEATED_FAILURES: 'Repeated Authentication Failures',
     UNFAMILIAR_IP: 'Unfamiliar IP / Subnet Login',
-    UNUSUAL_TIME: 'Unusual / Off-Hours Activity'
+    UNUSUAL_TIME: 'Unusual / Off-Hours Activity',
+    IMPOSSIBLE_TRAVEL: 'Impossible Travel / Geographic Velocity Anomaly'
   };
 
   const categoryWeights: Record<RuleCategory, number> = {
     BURST_FAILURE_THEN_SUCCESS: 45,
+    IMPOSSIBLE_TRAVEL: 40,
     HOST_EXPANSION: 30,
     PASSWORD_SPRAY: 25,
     REPEATED_FAILURES: 20,
@@ -204,13 +206,16 @@ export function calculateRiskScore(alerts: DetectionAlert[]): CalculatedRiskResu
 
   // Threat classification
   let threatClass: ThreatClass = 'SUSPICIOUS';
-  if (hasConfirmedCompromise || (finalScore >= 80 && triggeredCategories.has('HOST_EXPANSION'))) {
+  if (hasConfirmedCompromise || (finalScore >= 80 && (triggeredCategories.has('HOST_EXPANSION') || triggeredCategories.has('IMPOSSIBLE_TRAVEL')))) {
     threatClass = 'CONFIRMED_COMPROMISE';
   }
 
   const explanations: string[] = [];
   if (hasConfirmedCompromise) {
     explanations.push('Critical threat: Credential compromise pattern identified.');
+  }
+  if (triggeredCategories.has('IMPOSSIBLE_TRAVEL')) {
+    explanations.push('Critical impossible travel anomaly detected across distant geographic locations.');
   }
   if (triggeredCategories.has('HOST_EXPANSION')) {
     explanations.push('Host expansion outside authorized maintenance window detected.');

@@ -10,6 +10,50 @@ export interface ParseResult {
   detectedColumns: string[];
 }
 
+/**
+ * Validates and normalizes source IP telemetry, detecting missing or malformed records
+ */
+export function validateIpAddress(rawIp: string | undefined): {
+  normalizedIp: string;
+  status: 'VALID' | 'MISSING' | 'INVALID_FORMAT';
+  uncertaintyNotes?: string;
+} {
+  const trimmed = (rawIp || '').trim();
+  if (!trimmed || trimmed === '-' || trimmed === 'N/A' || trimmed.toUpperCase() === 'UNKNOWN' || trimmed === '0.0.0.0') {
+    return {
+      normalizedIp: 'MISSING_IP',
+      status: 'MISSING',
+      uncertaintyNotes: 'Source IP telemetry is missing from authentication record. Geolocation and origin-based heuristics carry high uncertainty.'
+    };
+  }
+
+  // Check IPv4 format: 4 octets each 0-255
+  const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+  const match = trimmed.match(ipv4Regex);
+  if (!match) {
+    return {
+      normalizedIp: trimmed,
+      status: 'INVALID_FORMAT',
+      uncertaintyNotes: `Source IP '${trimmed}' has an invalid format. Cannot reliably derive CIDR subnet or geographic attribution.`
+    };
+  }
+
+  const octets = [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
+  const allValid = octets.every(o => o >= 0 && o <= 255);
+  if (!allValid) {
+    return {
+      normalizedIp: trimmed,
+      status: 'INVALID_FORMAT',
+      uncertaintyNotes: `Source IP '${trimmed}' has out-of-range octets (>255). Telemetry is corrupted or malformed.`
+    };
+  }
+
+  return {
+    normalizedIp: trimmed,
+    status: 'VALID'
+  };
+}
+
 export function parseAuthLogsCsv(csvContent: string, companyId: string = 'COMP-001'): ParseResult {
   const errors: string[] = [];
   const logs: NormalizedAuthLog[] = [];
@@ -88,6 +132,21 @@ export function parseAuthLogsCsv(csvContent: string, companyId: string = 'COMP-0
       normalizedReason = 'Login successful';
     }
 
+    const ipValidation = validateIpAddress(rawIp);
+    const isUncertain = ipValidation.status !== 'VALID';
+
+    let location = rawLocation;
+    if (!location) {
+      if (ipValidation.status === 'VALID') {
+        const ip = ipValidation.normalizedIp;
+        location = (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('172.16.')) 
+          ? 'Internal Corporate LAN' 
+          : 'External IP';
+      } else {
+        location = 'Unknown / Unverified Location';
+      }
+    }
+
     const logItem: NormalizedAuthLog = {
       id: `LOG-${(index + 1).toString().padStart(5, '0')}`,
       rawTimestamp: rawTimestamp || 'N/A',
@@ -95,17 +154,20 @@ export function parseAuthLogsCsv(csvContent: string, companyId: string = 'COMP-0
       dateObj: timeResult.dateObj,
       epochMs: timeResult.epochMs,
       user: rawUser || 'UNKNOWN_USER',
-      ip: rawIp || '0.0.0.0',
+      ip: ipValidation.normalizedIp,
       host: (rawHost || 'UNKNOWN_HOST').toUpperCase(),
       action,
       failureReason: normalizedReason,
-      location: rawLocation || (rawIp.startsWith('10.') || rawIp.startsWith('192.168.') || rawIp.startsWith('172.16.') ? 'Internal Corporate LAN' : 'External IP'),
+      location,
       userAgent: rawUserAgent,
       hash: '',
       isDuplicate: false,
       duplicateCount: 1,
       inTrainingPeriod: false,
-      companyId
+      companyId,
+      ipValidationStatus: ipValidation.status,
+      telemetryUncertainty: isUncertain,
+      uncertaintyNotes: ipValidation.uncertaintyNotes
     };
 
     logItem.hash = generateLogHash(logItem);

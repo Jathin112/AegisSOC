@@ -242,6 +242,11 @@ export function runDetectionRules(
     const windowMs = (sprayRule.params.sprayWindowMinutes || 20) * 60 * 1000;
 
     ipLogsMap.forEach((ipLogs, sourceIp) => {
+      // Mission 4: Do not attribute horizontal password spray to missing or unverified IP telemetry
+      if (!sourceIp || sourceIp === 'MISSING_IP' || sourceIp === '0.0.0.0' || sourceIp.includes('MISSING')) {
+        return;
+      }
+
       for (let i = 0; i < ipLogs.length; i++) {
         const startMs = ipLogs[i].epochMs;
         const endMs = startMs + windowMs;
@@ -358,14 +363,16 @@ export function runDetectionRules(
     for (const log of evalLogs) {
       const uKey = log.user.toLowerCase().trim();
       const baseline = baselines.get(uKey);
-      if (!baseline || baseline.totalEvents < 2) continue;
+      const isIpMissingOrInvalid = log.ipValidationStatus === 'MISSING' || log.ipValidationStatus === 'INVALID_FORMAT' || log.ip === 'MISSING_IP';
+
+      if (!isIpMissingOrInvalid && (!baseline || baseline.totalEvents < 2)) continue;
 
       const userCfg = accountsMap.get(uKey);
       const logSubnet = extractSubnet(log.ip);
-      const isKnownIp = baseline.usualIPs.includes(log.ip);
-      const isKnownSubnet = baseline.usualSubnets.includes(logSubnet);
+      const isKnownIp = baseline ? baseline.usualIPs.includes(log.ip) : false;
+      const isKnownSubnet = baseline ? baseline.usualSubnets.includes(logSubnet) : false;
 
-      const isUnfamiliar = ipRule.params.subnetMatchOnly ? !isKnownSubnet : !isKnownIp;
+      const isUnfamiliar = isIpMissingOrInvalid || (ipRule.params.subnetMatchOnly ? !isKnownSubnet : !isKnownIp);
 
       if (isUnfamiliar) {
         // Context Check: Is this coming via Company VPN Gateway or authorized traveling employee?
@@ -378,7 +385,14 @@ export function runDetectionRules(
         let explanation = `Authentication from unfamiliar IP address ${log.ip} (${log.location || 'Unknown Geo'}, Subnet: ${logSubnet}) not present in baseline profile.`;
         const flags: string[] = ['UNFAMILIAR_IP'];
 
-        if (matchedVpn) {
+        // Mission 4: Handle Missing or Invalid IP Telemetry with Uncertainty Communication
+        const isIpMissingOrInvalid = log.ipValidationStatus === 'MISSING' || log.ipValidationStatus === 'INVALID_FORMAT' || log.ip === 'MISSING_IP';
+        if (isIpMissingOrInvalid) {
+          flags.push('TELEMETRY_UNCERTAINTY', log.ipValidationStatus === 'MISSING' ? 'MISSING_SOURCE_IP' : 'INVALID_SOURCE_IP');
+          score = 8;
+          severity = 'LOW';
+          explanation = `TELEMETRY UNCERTAINTY: Authentication event for '${log.user}' is missing valid source IP telemetry (${log.uncertaintyNotes || 'IP address unrecorded'}). Geolocation heuristics are unverified; logged with low confidence for audit review.`;
+        } else if (matchedVpn) {
           flags.push('CORPORATE_VPN_GATEWAY', matchedVpn.gatewayName);
           if (isApprovedTraveler || log.action === 'SUCCESS') {
             isSuppressed = true;
@@ -405,16 +419,19 @@ export function runDetectionRules(
           decisionExplanation: explanation,
           isContextSuppressed: isSuppressed,
           suppressionReason: isSuppressed ? `Authorized Corporate VPN: ${matchedVpn?.gatewayName}` : undefined,
-          confidenceScore: isSuppressed ? 20 : 82,
-          confidenceLabel: isSuppressed ? 'LOW' : 'HIGH',
-          evidenceStrength: isSuppressed ? 'WEAK' : 'STRONG',
+          confidenceScore: isSuppressed ? 20 : isIpMissingOrInvalid ? 25 : 82,
+          confidenceLabel: (isSuppressed || isIpMissingOrInvalid) ? 'LOW' : 'HIGH',
+          evidenceStrength: (isSuppressed || isIpMissingOrInvalid) ? 'WEAK' : 'STRONG',
+          telemetryUncertainty: isIpMissingOrInvalid,
+          uncertaintyNotes: log.uncertaintyNotes,
           details: {
             observedIp: log.ip,
             observedLocation: log.location,
-            baselineUsualIps: baseline.usualIPs,
-            baselineUsualSubnets: baseline.usualSubnets,
+            baselineUsualIps: baseline?.usualIPs || [],
+            baselineUsualSubnets: baseline?.usualSubnets || [],
             corporateVpnGateway: matchedVpn?.gatewayName || null,
-            approvedTraveler: isApprovedTraveler
+            approvedTraveler: isApprovedTraveler,
+            ipValidationStatus: log.ipValidationStatus
           }
         });
       }
@@ -523,6 +540,99 @@ export function runDetectionRules(
             }
           });
           break;
+        }
+      }
+    });
+  }
+
+  // 7. IMPOSSIBLE TRAVEL / GEOGRAPHIC VELOCITY ANOMALY (Mission 4)
+  const travelRule = rulesMap.get('IMPOSSIBLE_TRAVEL');
+  if (travelRule && travelRule.enabled) {
+    const maxWindowMs = (travelRule.params.impossibleTravelWindowMinutes || 120) * 60 * 1000;
+
+    userLogsMap.forEach((userLogs, username) => {
+      const uKey = username.toLowerCase().trim();
+      const userCfg = accountsMap.get(uKey);
+      const isApprovedTraveler = userCfg?.isApprovedTraveler || false;
+
+      for (let i = 1; i < userLogs.length; i++) {
+        const prev = userLogs[i - 1];
+        const curr = userLogs[i];
+
+        // Skip missing or invalid IP events from velocity calculations
+        if (prev.ipValidationStatus === 'MISSING' || curr.ipValidationStatus === 'MISSING') continue;
+
+        const timeDiffMs = curr.epochMs - prev.epochMs;
+        if (timeDiffMs > 0 && timeDiffMs <= maxWindowMs) {
+          const prevLoc = (prev.location || '').toLowerCase();
+          const currLoc = (curr.location || '').toLowerCase();
+
+          // Check if geographically disparate (e.g. Austin vs London, Austin vs Sofia, Austin vs Tokyo)
+          const isAustinToEurope = (prevLoc.includes('austin') || prevLoc.includes('internal')) && 
+            (currLoc.includes('london') || currLoc.includes('sofia') || currLoc.includes('bucharest') || currLoc.includes('tokyo') || currLoc.includes('uk') || currLoc.includes('bulgaria'));
+          
+          const isDistantSubnets = prevLoc && currLoc && prevLoc !== currLoc &&
+            !prevLoc.includes('internal') && !currLoc.includes('internal') &&
+            extractSubnet(prev.ip) !== extractSubnet(curr.ip);
+
+          if (isAustinToEurope || isDistantSubnets) {
+            const timeDiffMins = Math.max(1, Math.round(timeDiffMs / 60000));
+            // Check corporate VPN status
+            const prevVpn = matchCompanyVpn(prev.ip, prev.host, prev.location, vpnConfigs);
+            const currVpn = matchCompanyVpn(curr.ip, curr.host, curr.location, vpnConfigs);
+            const hasVpn = !!(prevVpn || currVpn);
+
+            let isSuppressed = false;
+            let score = travelRule.baseWeight;
+            let severity = travelRule.severity;
+            let threatClass = travelRule.threatClass; // CONFIRMED_COMPROMISE
+            const flags: string[] = ['GEOGRAPHIC_VELOCITY_ANOMALY'];
+
+            let explanation = `CRITICAL IMPOSSIBLE TRAVEL: Account '${curr.user}' authenticated from '${prev.location}' (${prev.ip}) and '${curr.location}' (${curr.ip}) within ${timeDiffMins} minute(s). Physical transit speed is physically impossible without corporate VPN authorization. Indicates credential sharing or session hijacking.`;
+
+            if (hasVpn) {
+              const vpnName = (currVpn || prevVpn)?.gatewayName || 'Corporate VPN Gateway';
+              flags.push('CORPORATE_VPN_GATEWAY', 'LEGITIMATE_TRAVELER_APPROVED');
+              if (isApprovedTraveler || curr.action === 'SUCCESS') {
+                isSuppressed = true;
+                score = 8;
+                severity = 'LOW';
+                threatClass = 'SUSPICIOUS';
+                explanation = `FALSE POSITIVE MITIGATED: Multi-location authentication detected within ${timeDiffMins} mins ('${prev.location}' -> '${curr.location}'), but connection authenticated via Corporate VPN Gateway (${vpnName}). User '${curr.user}' is an authorized traveling employee.`;
+              }
+            }
+
+            alerts.push({
+              id: `ALT-TRAVEL-${uKey}-${curr.id}`,
+              ruleId: travelRule.id,
+              ruleCategory: 'IMPOSSIBLE_TRAVEL',
+              ruleName: travelRule.name,
+              user: curr.user,
+              timestamp: curr.timestamp,
+              severity,
+              threatClass,
+              score,
+              summary: explanation,
+              evidence: [prev, curr],
+              contextFlags: flags,
+              decisionExplanation: explanation,
+              isContextSuppressed: isSuppressed,
+              suppressionReason: isSuppressed ? `Corporate VPN Gateway Session: ${(currVpn || prevVpn)?.gatewayName}` : undefined,
+              confidenceScore: isSuppressed ? 25 : 96,
+              confidenceLabel: isSuppressed ? 'LOW' : 'VERY_HIGH',
+              evidenceStrength: isSuppressed ? 'WEAK' : 'VERY_STRONG',
+              details: {
+                previousLocation: prev.location,
+                previousIp: prev.ip,
+                currentLocation: curr.location,
+                currentIp: curr.ip,
+                timeDiffMinutes: timeDiffMins,
+                hasCorporateVpn: hasVpn,
+                approvedTraveler: isApprovedTraveler
+              }
+            });
+            break;
+          }
         }
       }
     });

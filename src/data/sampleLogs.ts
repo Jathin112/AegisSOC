@@ -80,6 +80,19 @@ export const SAMPLE_CSV_LOGS = `timestamp,user,ip,host,action,reason,location
 2026-10-14 14:19:00,sarah.jenkins,198.51.100.44,PORTAL-EXT01,SUCCESS,Login successful,Bucharest Romania
 2026-10-14 14:19:00,sarah.jenkins,198.51.100.44,PORTAL-EXT01,SUCCESS,Login successful,Bucharest Romania
 
+2026-10-10 09:00:00,norman.normal,10.200.1.50,WKSTN-NORM,SUCCESS,Login successful,Internal Austin LAN
+2026-10-11 09:05:00,norman.normal,10.200.1.50,WKSTN-NORM,SUCCESS,Login successful,Internal Austin LAN
+2026-10-12 09:10:00,norman.normal,10.200.1.50,WKSTN-NORM,SUCCESS,Login successful,Internal Austin LAN
+2026-10-13 09:15:00,norman.normal,10.200.1.50,WKSTN-NORM,SUCCESS,Login successful,Internal Austin LAN
+
+2026-10-14 09:30:00,norman.normal,10.200.1.50,WKSTN-NORM,SUCCESS,Login successful,Internal Austin LAN
+2026-10-14 10:00:00,victor.travel,10.200.1.77,WKSTN-VIC,SUCCESS,Login successful,Internal Austin LAN
+2026-10-14 10:20:00,victor.travel,185.120.45.10,PORTAL-EXT01,SUCCESS,Login successful,London UK
+
+2026-10-14 11:00:00,ian.uncertain,-,PORTAL-EXT01,FAILURE,Bad Password,
+2026-10-14 11:05:00,ian.uncertain,UNKNOWN,PORTAL-EXT01,FAILURE,Bad Password,
+2026-10-14 11:10:00,corrupt.user,999.999.999.999,WKSTN-CORP01,FAILURE,Bad Password,
+
 2026-10-14 15:00:20,alice.m,10.200.1.45,WKSTN-ALICE,SUCCESS,Login successful,Internal Austin LAN
 2026-10-14 15:30:10,bob.k,10.200.1.46,WKSTN-BOB,SUCCESS,Login successful,Internal Austin LAN
 `;
