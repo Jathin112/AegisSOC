@@ -4,6 +4,9 @@
 
 Designed in accordance with corporate enterprise SOC ergonomics: a clean, high-contrast slate gray and white palette, zero flashy neon or distracting gradients, and structured forensic triage workflows.
 
+
+***AI Usage Disclosure***:
+Development was assisted by Google Antigravity / Gemini Advanced Agentic Coding for rapid prototyping, architecture brainstorming, test harness generation, and algorithmic refactoring. All core heuristics, deterministic deduplication logic, risk scoring mathematics, and forensic validation rules were reviewed, tested, and verified by the team.
 ---
 
 ## Key System Capabilities
